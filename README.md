@@ -1,3 +1,6 @@
+![Views](https://img.shields.io/endpoint?url=https%3A%2F%2Fhits.dwyl.com%2Ftenda96%2FArr-Telegram-Notifier.json%3Fcolor%3Dblue&style=for-the-badge)
+![Stars](https://img.shields.io/github/stars/tenda96/Arr-Telegram-Notifier?style=for-the-badge&color=yellow)
+![Forks](https://img.shields.io/github/forks/tenda96/Arr-Telegram-Notifier?style=for-the-badge&color=lightgrey)
 # Arr-Telegram-Notifier (v1.0)
 
 A powerful bash script for **Sonarr**, **Radarr**, and **Lidarr** that sends detailed Telegram notifications. It groups multiple files (like full albums or seasons) into a single, clean notification.
