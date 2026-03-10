@@ -1,37 +1,66 @@
-![Views](https://img.shields.io/endpoint?url=https%3A%2F%2Fhits.dwyl.com%2Ftenda96%2FArr-Telegram-Notifier.json%3Fcolor%3Dblue&style=for-the-badge)
+![Views](https://komarev.com/ghpvc/?username=tenda96&repo=Arr-Telegram-Notifier&color=blue&style=for-the-badge)
 ![Stars](https://img.shields.io/github/stars/tenda96/Arr-Telegram-Notifier?style=for-the-badge&color=yellow)
 ![Forks](https://img.shields.io/github/forks/tenda96/Arr-Telegram-Notifier?style=for-the-badge&color=lightgrey)
-# Arr-Telegram-Notifier (v1.0)
 
-A powerful bash script for **Sonarr**, **Radarr**, and **Lidarr** that sends detailed Telegram notifications. It groups multiple files (like full albums or seasons) into a single, clean notification.
+# Arr-Telegram-Notifier
 
-## ⚠️ Important Prerequisites
-Before starting, ensure the following:
-* **File Visibility**: If you are using Docker (e.g., on Unraid), the script **must** be located in a folder visible to all containers. 
-    * *Example*: Map a host folder like `/mnt/user/appdata/scripts/` to `/scripts/` in each container's volume settings.
-* **IP Configuration**: You must edit the `UNRAID_IP` variable inside the script to match your server's local IP address.
-* **Dependencies**: Ensure `jq` and `curl` are installed (usually present in LinuxServer.io images).
+A professional bash script for **Sonarr**, **Radarr**, and **Lidarr** that sends rich Telegram notifications. It features a "Collector" logic that groups concurrent downloads (like full albums or seasons) into a single, clean message.
 
-## 🚀 Installation
+## 🌟 How it behaves
+- **Grouping**: Automatically detects multiple incoming files (e.g., an entire album or a batch of episodes) and sends one single notification with the full list after a short delay.
+- **Precision**: Queries the internal APIs of the "Arr" apps to retrieve exact titles, durations, and file sizes.
+- **Mobile Optimized**: Designed specifically for Telegram mobile, using clean line breaks and styling.
+
+## ⚠️ Prerequisites
+* **File Visibility**: The script must be in a folder accessible by all containers (e.g., map `/mnt/user/appdata/scripts/` to `/scripts/` in Docker Compose).
+* **Dependencies**: Requires `jq`, `curl`, and `bc`.
+
+## 🚀 Installation & Configuration
 1.  Download `arr-notifier.sh` and place it in your shared scripts folder.
-2.  Give it execution permissions: `chmod +x arr-notifier.sh`.
-3.  Open the script and configure:
+2.  Set permissions: `chmod +x arr-notifier.sh`.
+3.  Edit the script variables:
     * `TELEGRAM_TOKEN` & `TELEGRAM_CHAT_ID`.
     * `SONARR_API_KEY`, `RADARR_API_KEY`, `LIDARR_API_KEY`.
-    * `UNRAID_IP` (Your server's local IP).
+    * `SERVER_IP` (Your local Unraid/Server IP).
 
 ## ⚙️ App Configuration
-In **Sonarr**, **Radarr**, and **Lidarr**, go to `Settings > Connect`:
-1.  Add a new **Custom Script** notification.
-2.  **Path**: Set the path *as seen by the container* (e.g., `/scripts/arr-notifier.sh`).
-3.  **Triggers**: Select only `On Download` and `On Upgrade`. 
-    * *Note*: Disable `On Grab` to avoid duplicate "searching" notifications.
+In Sonarr, Radarr, and Lidarr, go to **Settings > Connect**:
+1.  Add a new **Custom Script**.
+2.  **Path**: Set the container path (e.g., `/scripts/arr-notifier.sh`).
+3.  **Triggers**: Select ONLY `On Download` and `On Upgrade`.
+    * *Important*: This script is designed to run when the file import is completed.
 
-## 📝 Changelog (v1.0)
+---
+
+## 📸 Notification Gallery
+
+| Radarr (Movie) | Sonarr (Single) | Sonarr (Season) |
+| :---: | :---: | :---: |
+| ![Radarr](examples/radarr.png) | ![Sonarr Single](examples/sonarr_single.png) | ![Sonarr Season](examples/sonarr_season.png) |
+| *Movie Details* | *Single Episode* | *Full Season Grouping* |
+
+| Lidarr (Song) | Lidarr (Album) |
+| :---: | :---: |
+| ![Lidarr Single](examples/lidarr_single.png) | ![Lidarr Album](examples/lidarr_album.png) |
+| *Single Track* | *Full Album Grouping* |
+
+---
+
+## 📝 Changelog
+
+### v2.0
+- **UI Redesign**: Complete overhaul of the notification layout (Mobile Optimized).
+- **Grouping Engine**: Improved debounce logic for Albums and Seasons with natural sorting.
+- **Precision Data**: Fixed "00" episode numbers and "Unknown" titles by targeting specific API endpoints.
+- **Compact Lists**: Redesigned list format: `• 01_Title (Duration)`.
+- **Text Styling**: Added Bold headers and Italic values (removed monospace blue text).
+
+### v1.0
 - Initial release with English localization.
 - Integrated "Collector" logic to debounce multiple triggers for Albums/Seasons.
 - Added `ffprobe` support for real-time audio language detection.
 
-## 🐛 Known Issues & Limitations
-- **Album/Season Display**: Currently, if the "Arr" database updates too slowly, track names or episode titles might appear as "Unknown" or "00:00" duration. A 15-second delay is included to mitigate this.
-- **Image Caching**: Telegram may occasionally fail to display covers if the URL provided by the API is not publicly reachable.
+## 🛠️ Upcoming Features (Roadmap)
+- ♻️ **Enhanced Upgrade Support**: Specific notification tags when a higher quality replaces an old file.
+- 🖼️ **Fallback Image Handling**: Smarter artist/series poster selection if specific album/episode covers are missing.
+- 📊 **Activity Logging**: Implementation of a local log file to track notification history and debugging.
