@@ -64,3 +64,6 @@ In Sonarr, Radarr, and Lidarr, go to **Settings > Connect**:
 - ♻️ **Enhanced Upgrade Support**: Specific notification tags when a higher quality replaces an old file.
 - 🖼️ **Fallback Image Handling**: Smarter artist/series poster selection if specific album/episode covers are missing.
 - 📊 **Activity Logging**: Implementation of a local log file to track notification history and debugging.
+
+## License
+This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
