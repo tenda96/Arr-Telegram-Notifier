@@ -50,6 +50,10 @@ It features a "Collector" logic that groups concurrent downloads (like full albu
    RADARR_API_KEY="YOUR_RADARR_API_KEY"
    LIDARR_API_KEY="YOUR_LIDARR_API_KEY"
    SERVER_IP="YOUR_SERVER_IP"
+
+   SONARR_PORT="${SONARR_PORT:-8989}"
+   RADARR_PORT="${RADARR_PORT:-7878}"
+   LIDARR_PORT="${LIDARR_PORT:-8686}"
    ```
 
 ### Telegram destination mode
@@ -98,6 +102,14 @@ Maximum debug log size before rotation:
 
 ```bash
 MAX_LOG_SIZE_MB="${MAX_LOG_SIZE_MB:-5}"
+```
+
+Custom app ports, if your services do not use the default ones:
+
+```bash
+SONARR_PORT="${SONARR_PORT:-8989}"
+RADARR_PORT="${RADARR_PORT:-7878}"
+LIDARR_PORT="${LIDARR_PORT:-8686}"
 ```
 
 ## ⚙️ App Configuration
@@ -171,6 +183,7 @@ Upgrade notifications use the same layout as normal notifications, but the heade
 - **Track Number Fix**: Handles Lidarr track numbers like `A1`, `A2`, `B1`, etc.
 - **Telegram Button Fix**: Avoids sending empty inline keyboards when Lidarr artists have no Spotify or YouTube links.
 - **Safer Message Formatting**: Avoids `printf` issues when titles contain `%`.
+- **Configurable App Ports**: Added `SONARR_PORT`, `RADARR_PORT`, and `LIDARR_PORT` for setups using non-standard service ports.
 
 ### v3.0 (Master Release)
 - **Advanced Season Pack Handling**: Added logic to parse multiple IDs divided by pipe `|` in Sonarr v4, perfectly grouping 10+ episodes in a single Season notification.
