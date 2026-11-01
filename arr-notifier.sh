@@ -54,6 +54,12 @@ ASYNC_MODE="${ASYNC_MODE:-true}"
 # Wait time used to merge Sonarr season packs / Lidarr album events before sending one notification.
 DEBOUNCE_SECONDS="${DEBOUNCE_SECONDS:-15}"
 
+# SINGLE EPISODE DETAILS (Sonarr)
+# true  = for a single episode, show that episode's own plot and use its screenshot as the image.
+#         Falls back to the series plot / poster when the episode has none.
+# false = always show the series plot and poster.
+EPISODE_DETAILS="${EPISODE_DETAILS:-true}"
+
 # --- DYNAMIC PATHS ---
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$BASE_DIR/logs"
@@ -267,6 +273,38 @@ fetch_data() {
     log_msg "API ERROR: $url"; return 1
 }
 
+# Field separator of the temp list files (a "|" can legitimately appear in a title).
+SEP=$'\x1f'
+
+# Telegram parse_mode=HTML: "&", "<" and ">" in titles/plots must be escaped or the whole message is rejected.
+html_escape() {
+    sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# Telegram counts the visible characters of a caption (tags excluded).
+visible_len() {
+    printf '%s' "$1" | sed 's/<[^>]*>//g' | wc -m | tr -d ' '
+}
+
+# Calls a Telegram Bot API method. Retries on rate limit (429) and on network errors.
+# Prints the last response; returns 0 only if Telegram answered ok=true.
+telegram_call() {
+    local method="$1"; shift
+    local attempt=1 resp retry
+    while [ $attempt -le 3 ]; do
+        resp=$(curl -s -m 30 -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/$method" "$@")
+        if echo "$resp" | jq -e '.ok == true' >/dev/null 2>&1; then
+            echo "$resp"; return 0
+        fi
+        retry=$(echo "$resp" | jq -r '.parameters.retry_after // empty' 2>/dev/null)
+        if [ $attempt -lt 3 ] && { [ -n "$retry" ] || [ -z "$resp" ]; }; then
+            log_msg "Telegram $method: ${retry:+rate limited, }retrying ($attempt/3)..."
+            sleep "${retry:-3}"; attempt=$((attempt + 1)); continue
+        fi
+        echo "$resp"; return 1
+    done
+}
+
 # --- 1. APP DETECTION & EVENT FILTER ---
 EVENT_TYPE="${sonarr_eventtype:-}${radarr_eventtype:-}${lidarr_eventtype:-}${Lidarr_EventType:-}"
 
@@ -336,14 +374,15 @@ if [ "$TYPE" = "TV" ]; then
         EP_S_NUM=$(echo "$F_JSON" | jq -r '.seasonNumber // 0')
         EP_SIZE=$(echo "$F_JSON" | jq -r '.size // 0')
         EP_QUAL=$(echo "$F_JSON" | jq -r '.quality.quality.name // "N/A"')
-        EP_DATA=$(echo "$E_INFO" | jq -r ".[] | select(.episodeFileId == $FID) | \"\(.episodeNumber)|\(.title)\"" | head -n1)
-        EP_NUM=$(echo "$EP_DATA" | cut -d'|' -f1)
-        EP_TITLE=$(echo "$EP_DATA" | cut -d'|' -f2-)
+        EP_DATA=$(echo "$E_INFO" | jq -r ".[] | select(.episodeFileId == $FID) | \"\(.id)|\(.episodeNumber)|\(.title)\"" | head -n1)
+        EP_ID=$(echo "$EP_DATA" | cut -d'|' -f1)
+        EP_NUM=$(echo "$EP_DATA" | cut -d'|' -f2)
+        EP_TITLE=$(echo "$EP_DATA" | cut -d'|' -f3-)
         LANGS=$(echo "$F_JSON" | jq -r '.languages[].name' | tr '\n' '/' | sed 's/\/$//' | tr '[:lower:]' '[:upper:]')
         D_RAW=$(echo "$F_JSON" | jq -r '.mediaInfo.runTime // "00:00"')
         DUR_MIN=$(echo "$D_RAW" | cut -d: -f1 | sed 's/^0*//')
 
-        echo "${EP_NUM:-00}|${EP_TITLE:-Episode}|${EP_SIZE:-0}|$EP_QUAL|${LANGS:-ND}|${DUR_MIN:-0}|${EP_S_NUM:-0}" >> "$TEMP_FILE"
+        echo "${EP_NUM:-00}${SEP}${EP_TITLE:-Episode}${SEP}${EP_SIZE:-0}${SEP}$EP_QUAL${SEP}${LANGS:-ND}${SEP}${DUR_MIN:-0}${SEP}${EP_S_NUM:-0}${SEP}${EP_ID:-0}" >> "$TEMP_FILE"
     done
     INFO_STR=""
 
@@ -370,7 +409,7 @@ elif [ "$TYPE" = "MUSIC" ]; then
                 D_RAW_STR=$(echo "$file_obj" | jq -r '.audioTags.duration // "00:00"')
                 T_D_SEC=$(echo "$D_RAW_STR" | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }' | cut -d. -f1)
             fi
-            echo "${T_INDEX}|${T_TITLE}|${T_SIZE}|${T_QUAL}|${T_D_SEC:-0}" >> "$TEMP_FILE"
+            echo "${T_INDEX}${SEP}${T_TITLE}${SEP}${T_SIZE}${SEP}${T_QUAL}${SEP}${T_D_SEC:-0}" >> "$TEMP_FILE"
         done
         INFO_STR=""
     else
@@ -388,7 +427,7 @@ elif [ "$TYPE" = "MUSIC" ]; then
             D_RAW_STR=$(echo "$F_JSON" | jq -r '.audioTags.duration // "00:00"')
             T_D_SEC=$(echo "$D_RAW_STR" | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }' | cut -d. -f1)
         fi
-        INFO_STR="${T_INDEX}|${T_TITLE}|${T_SIZE}|${T_QUAL}|${T_D_SEC:-0}"
+        INFO_STR="${T_INDEX}${SEP}${T_TITLE}${SEP}${T_SIZE}${SEP}${T_QUAL}${SEP}${T_D_SEC:-0}"
     fi
 fi
 
@@ -409,12 +448,13 @@ fi
 
 # --- 3. METADATA FETCH & UI ---
 BUTTONS=""
-MAIN_JSON=$(curl -s "http://$SERVER_IP:$PORT/api/$VER/$ENDPOINT/$ID?apikey=$API_KEY")
-GENRES=$(echo "$MAIN_JSON" | jq -r '.genres | join(", ")')
-OVERVIEW=$(echo "$MAIN_JSON" | jq -r '.overview // empty' | sed 's/<[^>]*>//g' | cut -c1-300)
+MAIN_JSON=$(curl -s -m 10 "http://$SERVER_IP:$PORT/api/$VER/$ENDPOINT/$ID?apikey=$API_KEY")
+GENRES=$(echo "$MAIN_JSON" | jq -r '.genres | join(", ")' | html_escape)
+OVERVIEW=$(echo "$MAIN_JSON" | jq -r '.overview // empty' | sed 's/<[^>]*>//g' | cut -c1-300 | html_escape)
+LIST_ARR=()
 
 if [ "$TYPE" = "MOVIE" ]; then
-    F_JSON=$(curl -s "http://$SERVER_IP:$RADARR_PORT/api/v3/moviefile/$FILE_ID?apikey=$RADARR_API_KEY")
+    F_JSON=$(curl -s -m 10 "http://$SERVER_IP:$RADARR_PORT/api/v3/moviefile/$FILE_ID?apikey=$RADARR_API_KEY")
     QUAL=$(echo "$F_JSON" | jq -r '.quality.quality.name // "N/A"')
     SIZE=$(format_size $(echo "$F_JSON" | jq -r '.size // 0') "MOVIE")
     RUNTIME=$(echo "$MAIN_JSON" | jq -r '.runtime // 0')
@@ -424,21 +464,37 @@ if [ "$TYPE" = "MOVIE" ]; then
     LANGS=$(echo "$F_JSON" | jq -r '.languages[].name' | tr '\n' '/' | sed 's/\/$//' | tr '[:lower:]' '[:upper:]')
 
     HEADER="🎬 [MOVIE $IMPORT_ACTION] - Radarr"
-    BODY="<b>TITLE:</b> <i>$(echo "$MAIN_JSON" | jq -r '.title')</i>\n<b>GENRE:</b> <i>$GENRES</i>\n<b>QUALITY:</b> <i>$QUAL</i>\n<b>LANGUAGE:</b> <i>${LANGS:-ND}</i>\n<b>DURATION:</b> <i>${RUNTIME} min</i>\n<b>IMDB RATING:</b> <i>$RATING</i>\n<b>WEIGHT:</b> <i>$SIZE</i>\n\n<b>PLOT:</b> <i>$OVERVIEW...</i>"
+    BODY="<b>TITLE:</b> <i>$(echo "$MAIN_JSON" | jq -r '.title' | html_escape)</i>\n<b>GENRE:</b> <i>$GENRES</i>\n<b>QUALITY:</b> <i>$QUAL</i>\n<b>LANGUAGE:</b> <i>${LANGS:-ND}</i>\n<b>DURATION:</b> <i>${RUNTIME} min</i>\n<b>IMDB RATING:</b> <i>$RATING</i>\n<b>WEIGHT:</b> <i>$SIZE</i>\n\n<b>PLOT:</b> <i>$OVERVIEW...</i>"
     [[ -n "$IMDB_ID" ]] && BUTTONS="{\"inline_keyboard\": [[{\"text\": \"🌐 IMDb\", \"url\": \"https://www.imdb.com/title/$IMDB_ID\"}]]}"
 
 elif [ "$TYPE" = "TV" ]; then
-    TITLE=$(echo "$MAIN_JSON" | jq -r '.title')
+    TITLE=$(echo "$MAIN_JSON" | jq -r '.title' | html_escape)
     IMDB_ID=$(echo "$MAIN_JSON" | jq -r '.imdbId')
     RATING=$(echo "$MAIN_JSON" | jq -r '.ratings.value // "N/A"')
     IMAGE_URL=$(echo "$MAIN_JSON" | jq -r '.images[] | select(.coverType=="poster") | .remoteUrl' | head -n1)
     LIST=""; TOTAL_SIZE=0; ALL_DUR=0; COUNT=$(wc -l < "$TEMP_FILE")
 
-    while IFS='|' read -r NUM T_TITLE SIZE QUAL LNG DUR S_NUM; do
-        LIST="${LIST}• $(printf "%02d" "$NUM")_${T_TITLE} (${DUR} min)\n"
+    while IFS="$SEP" read -r NUM T_TITLE SIZE QUAL LNG DUR S_NUM EP_ID; do
+        T_TITLE=$(printf '%s' "$T_TITLE" | html_escape)
+        LIST_ARR+=("• $(printf "%02d" "$NUM")_${T_TITLE} (${DUR} min)\n")
+        LIST="${LIST}${LIST_ARR[${#LIST_ARR[@]}-1]}"
         TOTAL_SIZE=$((TOTAL_SIZE + SIZE)); FINAL_QUAL="$QUAL"; ALL_LANGS="$LNG"; ALL_DUR=$((ALL_DUR + DUR)); FINAL_S="$S_NUM"
-        SINGLE_NUM="$NUM"; SINGLE_TITLE="$T_TITLE"
+        SINGLE_NUM="$NUM"; SINGLE_TITLE="$T_TITLE"; SINGLE_EP_ID="$EP_ID"
     done < "$TEMP_FILE"
+
+    # Single episode: the episode's own plot and screenshot (only returned by the single-episode endpoint).
+    OVERVIEW_END="..."
+    if [ "$COUNT" -eq 1 ] && [ "$EPISODE_DETAILS" = "true" ] && [ "${SINGLE_EP_ID:-0}" != "0" ]; then
+        EP_JSON=$(curl -s -m 10 "http://$SERVER_IP:$SONARR_PORT/api/v3/episode/$SINGLE_EP_ID?apikey=$SONARR_API_KEY")
+        EP_OVERVIEW=$(echo "$EP_JSON" | jq -r '.overview // empty' 2>/dev/null | sed 's/<[^>]*>//g')
+        EP_IMAGE=$(echo "$EP_JSON" | jq -r '[.images[]? | select(.coverType=="screenshot") | .remoteUrl][0] // empty' 2>/dev/null)
+        if [ -n "$EP_OVERVIEW" ]; then
+            [ "${#EP_OVERVIEW}" -le 300 ] && OVERVIEW_END=""
+            OVERVIEW=$(printf '%s' "$EP_OVERVIEW" | cut -c1-300 | html_escape)
+        fi
+        [ -n "$EP_IMAGE" ] && IMAGE_URL="$EP_IMAGE"
+        log_msg "Episode details: plot=${#EP_OVERVIEW} chars, screenshot=${EP_IMAGE:+yes}"
+    fi
 
     if [ "$COUNT" -gt 1 ]; then
         HEADER="🔵 [SEASON $IMPORT_ACTION] - Sonarr"
@@ -447,19 +503,21 @@ elif [ "$TYPE" = "TV" ]; then
         HEADER="🔵 [EPISODE $IMPORT_ACTION] - Sonarr"
         BODY="<b>TITLE:</b> <i>$TITLE</i>\n<b>SEASON:</b> <i>$(printf "%02d" "${FINAL_S:-0}")</i>\n<b>EPISODE:</b> <i>$(printf "%02d" "${SINGLE_NUM:-0}")</i>\n<b>EPISODE TITLE:</b> <i>${SINGLE_TITLE}</i>\n"
     fi
-    BODY="${BODY}<b>GENRE:</b> <i>$GENRES</i>\n<b>LANGUAGE:</b> <i>${ALL_LANGS:-ND}</i>\n<b>QUALITY:</b> <i>$FINAL_QUAL</i>\n<b>DURATION:</b> <i>${ALL_DUR:-0} min</i>\n<b>IMDB RATING:</b> <i>$RATING</i>\n<b>WEIGHT:</b> <i>$(format_size $TOTAL_SIZE "TV")</i>\n\n<b>PLOT:</b> <i>$OVERVIEW...</i>"
+    BODY="${BODY}<b>GENRE:</b> <i>$GENRES</i>\n<b>LANGUAGE:</b> <i>${ALL_LANGS:-ND}</i>\n<b>QUALITY:</b> <i>$FINAL_QUAL</i>\n<b>DURATION:</b> <i>${ALL_DUR:-0} min</i>\n<b>IMDB RATING:</b> <i>$RATING</i>\n<b>WEIGHT:</b> <i>$(format_size $TOTAL_SIZE "TV")</i>\n\n<b>PLOT:</b> <i>${OVERVIEW}${OVERVIEW_END}</i>"
     [[ -n "$IMDB_ID" ]] && BUTTONS="{\"inline_keyboard\": [[{\"text\": \"🌐 IMDb\", \"url\": \"https://www.imdb.com/title/$IMDB_ID\"}]]}"
 
 elif [ "$TYPE" = "MUSIC" ]; then
-    ALB_JSON=$(curl -s "http://$SERVER_IP:$LIDARR_PORT/api/v1/album/$ALB_ID?apikey=$LIDARR_API_KEY")
-    ART_NAME=$(echo "$MAIN_JSON" | jq -r '.artistName')
-    ALB_NAME=$(echo "$ALB_JSON" | jq -r '.title')
+    ALB_JSON=$(curl -s -m 10 "http://$SERVER_IP:$LIDARR_PORT/api/v1/album/$ALB_ID?apikey=$LIDARR_API_KEY")
+    ART_NAME=$(echo "$MAIN_JSON" | jq -r '.artistName' | html_escape)
+    ALB_NAME=$(echo "$ALB_JSON" | jq -r '.title' | html_escape)
     IMAGE_URL=$(echo "$ALB_JSON" | jq -r '.images[] | select(.coverType=="cover") | .remoteUrl' | head -n1)
     LIST=""; TOTAL_SIZE=0; TOTAL_SEC=0; COUNT=$(wc -l < "$TEMP_FILE")
 
-    while IFS='|' read -r NUM T_TITLE SIZE QUAL DUR; do
+    while IFS="$SEP" read -r NUM T_TITLE SIZE QUAL DUR; do
+        T_TITLE=$(printf '%s' "$T_TITLE" | html_escape)
         MIN=$((DUR/60)); SEC=$((DUR%60)); DUR_F=$(printf "%02d:%02d" $MIN $SEC)
-        LIST="${LIST}• $(format_track_number "$NUM")_${T_TITLE} (${DUR_F})\n"
+        LIST_ARR+=("• $(format_track_number "$NUM")_${T_TITLE} (${DUR_F})\n")
+        LIST="${LIST}${LIST_ARR[${#LIST_ARR[@]}-1]}"
         TOTAL_SIZE=$((TOTAL_SIZE + SIZE)); TOTAL_SEC=$((TOTAL_SEC + DUR)); FINAL_QUAL="$QUAL"
         S_TITLE="$T_TITLE"; S_NUM="$NUM"
     done < "$TEMP_FILE"
@@ -491,28 +549,67 @@ fi
 rm -f "$TEMP_FILE" "$LOCK_FILE"
 MSG=$(printf '<b>%s</b>\n\n%b' "$HEADER" "$BODY")
 
+# A photo caption is limited to 1024 characters: shorten long episode/track lists ("... +N more").
+CAPTION_LIMIT=1000
+if [ "${#LIST_ARR[@]}" -gt 3 ] && [ "$(visible_len "$MSG")" -gt "$CAPTION_LIMIT" ]; then
+    TOTAL_ITEMS=${#LIST_ARR[@]}; KEEP=$TOTAL_ITEMS
+    while [ "$KEEP" -gt 3 ]; do
+        KEEP=$((KEEP - 1))
+        NEW_LIST=""
+        for ((i = 0; i < KEEP; i++)); do NEW_LIST="${NEW_LIST}${LIST_ARR[i]}"; done
+        NEW_LIST="${NEW_LIST}• ... +$((TOTAL_ITEMS - KEEP)) more\n"
+        MSG=$(printf '<b>%s</b>\n\n%b' "$HEADER" "${BODY/"$LIST"/"$NEW_LIST"}")
+        [ "$(visible_len "$MSG")" -le "$CAPTION_LIMIT" ] && break
+    done
+    log_msg "Caption too long: list shortened to $KEEP of $TOTAL_ITEMS items."
+fi
+
 resolve_telegram_destination
 
-TG_ARGS=(
-    -s
-    -X POST
-    "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendPhoto"
-    --data-urlencode "chat_id=$TELEGRAM_TARGET_CHAT_ID"
-    --data-urlencode "photo=$IMAGE_URL"
-    --data-urlencode "caption=$MSG"
-    --data-urlencode "parse_mode=HTML"
-)
-
+TG_COMMON=(--data-urlencode "chat_id=$TELEGRAM_TARGET_CHAT_ID")
 if [ -n "${BUTTONS:-}" ]; then
-    TG_ARGS+=(--data-urlencode "reply_markup=$BUTTONS")
+    TG_COMMON+=(--data-urlencode "reply_markup=$BUTTONS")
 fi
-
 if [ "$TELEGRAM_DESTINATION_MODE" = "group_thread" ] && [ -n "$TELEGRAM_TARGET_THREAD_ID" ]; then
-    TG_ARGS+=(--data-urlencode "message_thread_id=$TELEGRAM_TARGET_THREAD_ID")
+    TG_COMMON+=(--data-urlencode "message_thread_id=$TELEGRAM_TARGET_THREAD_ID")
 fi
 
-TG_RESP=$(curl "${TG_ARGS[@]}")
+SENT=false
 
-log_telegram_response "$TG_RESP"
-log_msg "FINISH: Notification Sent."
+# 1) Photo + caption.
+if [ -n "${IMAGE_URL:-}" ] && [ "$IMAGE_URL" != "null" ]; then
+    if TG_RESP=$(telegram_call sendPhoto "${TG_COMMON[@]}" \
+            --data-urlencode "photo=$IMAGE_URL" --data-urlencode "caption=$MSG" --data-urlencode "parse_mode=HTML"); then
+        SENT=true
+    fi
+    log_telegram_response "$TG_RESP"
+else
+    log_msg "No image available: skipping sendPhoto."
+fi
+
+# 2) Fallback: text only (image unreachable, caption rejected...). Allows up to 4096 characters.
+if [ "$SENT" != "true" ]; then
+    log_msg "FALLBACK: sending text-only message."
+    if TG_RESP=$(telegram_call sendMessage "${TG_COMMON[@]}" \
+            --data-urlencode "text=$MSG" --data-urlencode "parse_mode=HTML" --data-urlencode "disable_web_page_preview=true"); then
+        SENT=true
+    fi
+    log_telegram_response "$TG_RESP"
+fi
+
+# 3) Last resort: plain text without formatting (in case Telegram still rejects the HTML).
+if [ "$SENT" != "true" ]; then
+    log_msg "FALLBACK: sending plain text message."
+    PLAIN=$(printf '%s' "$MSG" | sed -e 's/<[^>]*>//g' -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g')
+    if TG_RESP=$(telegram_call sendMessage "${TG_COMMON[@]}" --data-urlencode "text=$PLAIN"); then
+        SENT=true
+    fi
+    log_telegram_response "$TG_RESP"
+fi
+
+if [ "$SENT" = "true" ]; then
+    log_msg "FINISH: Notification Sent."
+else
+    log_msg "FINISH: ERROR - notification NOT sent."
+fi
 log_msg "================= END EVENT ================="

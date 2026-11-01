@@ -16,6 +16,8 @@ It features a "Collector" logic that groups concurrent downloads (like full albu
 - **Duplicate Protection**: Helps reduce duplicate notifications when an app triggers multiple import events for the same item.
 - **Async Mode**: The script can detach itself in the background so Sonarr, Radarr, and Lidarr do not wait for Telegram uploads or grouping delays.
 - **Auto-Discovery**: If the apps fail to provide proper File IDs during mass imports, the script securely queries their internal databases to fetch the missing data.
+- **Single Episode Details**: For a single Sonarr episode, the notification shows that episode's own plot and screenshot (falling back to the series plot and poster when missing). Can be disabled with `EPISODE_DETAILS="false"`.
+- **Reliable Delivery**: Long episode/track lists are shortened to fit Telegram's caption limit, special characters (`&`, `<`, `>`) are escaped, and if the photo cannot be sent the script falls back to a text-only message. Telegram rate limits (429) are retried.
 - **Precision**: Queries the internal APIs of the "Arr" apps to retrieve exact titles, qualities, durations, languages, and file sizes.
 - **Lidarr Compatibility**: Supports real Lidarr Custom Script variables such as `Lidarr_EventType`, `Lidarr_Artist_Id`, `Lidarr_Album_Id`, and `Lidarr_DeletedPaths`.
 - **Mobile Optimized**: Designed specifically for Telegram mobile, using clean line breaks and styling.
@@ -98,6 +100,12 @@ Grouping delay for albums and season packs:
 DEBOUNCE_SECONDS="${DEBOUNCE_SECONDS:-15}"
 ```
 
+Single episode details (plot and screenshot of the imported episode instead of the series plot and poster):
+
+```bash
+EPISODE_DETAILS="${EPISODE_DETAILS:-true}"
+```
+
 Maximum debug log size before rotation:
 
 ```bash
@@ -171,6 +179,14 @@ Upgrade notifications use the same layout as normal notifications, but the heade
 ---
 
 ## 📝 Changelog
+
+### v4.1
+- **Single Episode Details**: Sonarr notifications for a single episode now show the episode's own plot and screenshot, with fallback to the series plot and poster. Controlled by `EPISODE_DETAILS` (default `true`). Suggested in issue #1.
+- **Caption Length Fix**: Long season/album lists are shortened (`... +N more`) so the message never exceeds Telegram's 1024-character photo caption limit.
+- **Delivery Fallbacks**: If `sendPhoto` fails (unreachable image, rejected caption), the script retries as a text-only message, then as plain text. The log now reports whether the notification was really sent.
+- **HTML Escaping**: Titles, plots, album and artist names containing `&`, `<` or `>` no longer break the message.
+- **Safer Temp Files**: Titles containing `|` no longer corrupt the grouped episode/track lists.
+- **Timeouts and Retries**: Added timeouts to the Arr API calls and retry on Telegram rate limits (429) and network errors.
 
 ### v4.0
 - **Telegram Topic Routing**: Added support for private chat or Telegram forum-topic groups, with separate topics for Sonarr, Radarr, and Lidarr.
